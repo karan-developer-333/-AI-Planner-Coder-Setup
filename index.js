@@ -1,17 +1,31 @@
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import {tool} from "langchain";
 import fs from "fs";
 import path from "path";
 import readline from "readline";
 import dotenv from "dotenv";
+import { findImages } from "./tools.js";
+import z from "zod";
 
 dotenv.config();
 
+
+
+const imageFinderTool = tool(findImages,{
+  name: "image_finder",
+  description: "Finds images for a given product.",
+  inputSchema: z.object({
+    query: z.string().describe("The name of the product to find images for."),
+  }),
+  
+})
 
 // Coder + Reviewer → Gemini 3.1 Flash (higher free-tier quota than 2.0)
 const googleModel = new ChatGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
   model: "gemini-3.1-flash-lite-preview",
   maxOutputTokens: 8192,
+  tools: [imageFinderTool],
 });
 
 // ─── SYSTEM PROMPTS ──────────────────────────────────────────────────────────
@@ -214,6 +228,9 @@ Each component must:
 - Have padding (p-4 or p-6)
 - Have visual separation (border / shadow / bg)
 - Be reusable and clean
+
+## IMAGE FINDER TOOL:
+# You also have a tool for finding images, use it when needed.
 
 `;
 
