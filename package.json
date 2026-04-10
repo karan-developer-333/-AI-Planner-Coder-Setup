@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@langchain/google-genai": "latest",
+    "@langchain/mistralai": "latest",
+    "@tavily/core": "latest",
+    "dotenv": "latest",
+    "zod": "latest"
+  }
+}
