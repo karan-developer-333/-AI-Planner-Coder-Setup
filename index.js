@@ -1,5 +1,5 @@
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import {tool} from "langchain";
+import { tool } from "@langchain/core/tools";
 import fs from "fs";
 import path from "path";
 import readline from "readline";
@@ -30,8 +30,14 @@ const googleModel = new ChatGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
   model: "gemini-3.1-flash-lite-preview",
   temperature: 0.3,
-  // maxOutputTokens: 8192,
-  tools: [imageFinderTool,liveDataTool],
+  tools: [imageFinderTool, liveDataTool],
+});
+
+// Separate model for Reviewer (no tools needed, higher precision)
+const reviewerModel = new ChatGoogleGenerativeAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  model: "gemini-3.1-flash-lite-preview",
+  temperature: 0.1,
 });
 
 // ─── SYSTEM PROMPTS ──────────────────────────────────────────────────────────
@@ -286,26 +292,68 @@ lang
 
 `;
 
-// ─── REVIEWER PROMPT (lightweight) ───────────────────────────────────────────
+// ─── REVIEWER PROMPT (comprehensive) ────────────────────────────────────────
 
-const REVIEWER_PROMPT = `You are a code reviewer. Quickly check the generated project for the following:
+const REVIEWER_PROMPT = `You are an expert Next.js / React code reviewer and automatic fixer.
+You will receive a list of project files. Your job is to:
 
-1. Is tailwind.config.js present and using module.exports?
-2. Is postcss.config.js present with tailwindcss and autoprefixer?
-3. Does globals.css have @tailwind base/components/utilities?
-4. Are all imports resolvable (no missing packages)?
-5. Any obvious syntax errors?
+## DETECT AND FIX these categories of issues:
 
-Respond with either:
-- "READY" if everything looks good
-- A short numbered list of issues (max 5 lines total)
+### 1. CLIENT / SERVER BOUNDARY ISSUES (CRITICAL)
+- Any file using React hooks (useState, useEffect, useContext, useRef, useCallback, useMemo, useReducer etc.) MUST have "use client"; as its very first line.
+- Any file using framer-motion components (motion.div, motion.span, AnimatePresence etc.) MUST have "use client"; as its very first line.
+- Any file using browser APIs (window, document, localStorage, sessionStorage, navigator) MUST have "use client"; as its very first line.
+- Any file using event handlers (onClick, onChange, onSubmit etc. as props on HTML/component elements) that are NOT passed down from a parent — MUST have "use client";
+- Only add "use client"; where genuinely needed — do NOT add it to pure server components (page.tsx, layout.tsx, pure data-display components).
+- page.tsx and layout.tsx should remain Server Components UNLESS they directly use hooks/browser APIs.
 
-Be brief.`;
+### 2. IMPORT & PATH ISSUES
+- All imports must use the @/ alias (e.g. import Foo from '@/components/Foo') — NEVER relative paths like '../components/Foo'.
+- Fix any typos in import paths (wrong casing, extra slashes, wrong extension).
+- Remove imports of packages not listed in package.json dependencies.
+- Fix default vs named import mismatches.
+
+### 3. CONFIGURATION FILES
+- tailwind.config.js must use CommonJS (module.exports = {...}) and content must include "./src/**/*.{js,ts,jsx,tsx}".
+- postcss.config.js must use CommonJS with tailwindcss and autoprefixer plugins.
+- next.config.js must use CommonJS (module.exports = {...}).
+- globals.css must contain: @tailwind base; @tailwind components; @tailwind utilities;
+- tsconfig.json paths must have: "@/*": ["./src/*"]
+
+### 4. TYPOGRAPHY & SPELLING
+- Fix obvious typos in visible UI text (button labels, headings, descriptions, placeholder text).
+- Ensure heading hierarchy makes sense (h1 → h2 → h3).
+- Remove double spaces, "teh" → "the", "recieve" → "receive", etc.
+
+### 5. CODE QUALITY
+- Remove any TODO/FIXME placeholder comments.
+- Remove unused imports.
+- Ensure all JSX elements are properly closed.
+- Fix missing key props on mapped lists.
+
+## OUTPUT FORMAT (STRICT):
+Output ONLY the files that needed changes, using this exact format for each:
+
+# FILE: relative/path/to/file.ext
+\`\`\`lang
+...complete corrected file content...
+\`\`\`
+
+If a file is perfectly correct, DO NOT include it in the output.
+If ALL files are perfect, output exactly: LGTM
+
+## IMPORTANT:
+- Output the COMPLETE file content for every file you fix — not just the changed lines.
+- Do NOT add explanations between file blocks — only file blocks.
+- Do NOT use leading slash on file paths.
+
+Now review these project files:
+`;
 
 // ─── CORE PIPELINE ───────────────────────────────────────────────────────────
 
 async function Planner(userPrompt) {
-  console.log("\n🧠 [Planner — Mistral] Planning...\n");
+  console.log("\n🧠 [Planner] Planning...\n");
   const res = await googleModel.invoke([
     { role: "system", content: PLANNER_PROMPT },
     { role: "user", content: userPrompt },
@@ -314,12 +362,126 @@ async function Planner(userPrompt) {
 }
 
 async function Coder(plan) {
-  console.log("\n💻 [Coder — Gemini 3.1 Flash] Generating code...\n");
+  console.log("\n💻 [Coder] Generating code...\n");
   const res = await googleModel.invoke([
     { role: "system", content: CODER_PROMPT },
     { role: "user", content: `PLAN:\n${plan}` },
   ]);
   return res.content;
+}
+
+// ─── REVIEWER ────────────────────────────────────────────────────────────────
+
+/**
+ * Reads all source files from the generated project, sends them to the
+ * Reviewer AI, parses fixed files from the response, and writes them back.
+ */
+async function Reviewer(projectPath) {
+  console.log("\n🔍 [Reviewer] Scanning project for issues...\n");
+
+  // ── 1. Collect all project files ─────────────────────────────────────────
+  const SKIP_DIRS = new Set(["node_modules", ".next", ".git", ".turbo", "dist", "out", "build"]);
+  const SKIP_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2", ".ttf", ".eot", ".lock", ".map"]);
+  const MAX_FILE_CHARS = 6000; // prevent single huge file from blowing context
+
+  const projectFiles = [];
+
+  function collectFiles(dir) {
+    let items;
+    try { items = fs.readdirSync(dir); } catch { return; }
+
+    for (const item of items) {
+      if (SKIP_DIRS.has(item)) continue;
+
+      const fullPath = path.join(dir, item);
+      let stat;
+      try { stat = fs.statSync(fullPath); } catch { continue; }
+
+      if (stat.isDirectory()) {
+        collectFiles(fullPath);
+      } else {
+        const ext = path.extname(item).toLowerCase();
+        if (SKIP_EXTS.has(ext)) continue;
+
+        const relPath = path.relative(projectPath, fullPath).replace(/\\/g, "/");
+        let content;
+        try { content = fs.readFileSync(fullPath, "utf-8"); } catch { continue; }
+
+        // Truncate very large files
+        if (content.length > MAX_FILE_CHARS) {
+          content = content.slice(0, MAX_FILE_CHARS) + "\n...TRUNCATED...";
+        }
+
+        projectFiles.push({ path: relPath, content });
+      }
+    }
+  }
+
+  collectFiles(projectPath);
+
+  if (projectFiles.length === 0) {
+    console.warn("⚠️  [Reviewer] No files found to review.");
+    return;
+  }
+
+  console.log(`   📄 Files collected for review: ${projectFiles.length}`);
+
+  // ── 2. Format files for the AI prompt ───────────────────────────────────
+  const filesBlock = projectFiles
+    .map((f) => `# FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
+    .join("\n\n");
+
+  // ── 3. Call Reviewer AI ──────────────────────────────────────────────────
+  let reviewOutput;
+  try {
+    const res = await reviewerModel.invoke([
+      { role: "system", content: REVIEWER_PROMPT },
+      { role: "user", content: filesBlock },
+    ]);
+    reviewOutput = typeof res.content === "string" ? res.content : JSON.stringify(res.content);
+  } catch (err) {
+    console.error("❌ [Reviewer] AI call failed:", err.message || err);
+    return;
+  }
+
+  // ── 4. Check if no issues found ─────────────────────────────────────────
+  if (reviewOutput.trim().toUpperCase().startsWith("LGTM")) {
+    console.log("✅ [Reviewer] No issues found — project looks good!");
+    return;
+  }
+
+  // ── 5. Parse fixed files from reviewer output ────────────────────────────
+  const blockRegex = /^# FILE:\s*([^\n]+)\n```[^\n]*\n([\s\S]*?)^```/gm;
+  const fixes = [];
+  let match;
+
+  while ((match = blockRegex.exec(reviewOutput)) !== null) {
+    const relPath = match[1].trim().replace(/^\/+/, "");
+    const content = match[2];
+    fixes.push({ path: relPath, content });
+  }
+
+  if (fixes.length === 0) {
+    console.log("⚠️  [Reviewer] AI responded but no file fixes were parsed.");
+    console.log("   Raw reviewer notes:\n", reviewOutput.slice(0, 500));
+    return;
+  }
+
+  // ── 6. Write fixed files back ────────────────────────────────────────────
+  console.log(`\n🔧 [Reviewer] Applying ${fixes.length} fix(es):\n`);
+
+  for (const fix of fixes) {
+    const fullPath = path.join(projectPath, fix.path);
+    try {
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, fix.content);
+      console.log(`   ✅ Fixed: ${fix.path}`);
+    } catch (err) {
+      console.error(`   ❌ Could not write ${fix.path}:`, err.message);
+    }
+  }
+
+  console.log(`\n✅ [Reviewer] Done — ${fixes.length} file(s) patched.\n`);
 }
 
 
@@ -362,10 +524,10 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 const ask = (q) => new Promise((r) => rl.question(q, r));
 
 async function main() {
-  console.log("╔═══════════════════════════════════════════╗");
-  console.log("║   AI Project Builder  |  Token-Optimized  ║");
-  console.log("║   Planner: Mistral  |  Coder: Gemini 3.5  ║");
-  console.log("╚═══════════════════════════════════════════╝\n");
+  console.log("╔══════════════════════════════════════════════════╗");
+  console.log("║   AI Project Builder  |  Planner→Coder→Reviewer  ║");
+  console.log("║   Powered by Gemini 3.1 Flash                    ║");
+  console.log("╚══════════════════════════════════════════════════╝\n");
 
   const userRequest = await ask("🔷 What do you want to build?\n> ");
   if (!userRequest.trim()) { console.log("No input. Exiting."); rl.close(); return; }
@@ -397,11 +559,15 @@ async function main() {
     // 2. Code (single call)
     const code = await Coder(plan);
 
-    // 3. Build directly — no extra AI calls
+    // 3. Build project files
     buildProjectFolders(code, projectName);
 
+    // 4. Review & auto-fix the generated project
+    const projectPath = path.resolve(projectName);
+    await Reviewer(projectPath);
+
     console.log(`\n✅ Done! Project: "${projectName}/"`);
-    console.log(`👉  cd ${projectName} && npm install && npm run dev\n`);
+    console.log(`👉  cd ${projectName} && bun install && bun run dev\n`);
   } catch (err) {
     if (err.message?.includes("429")) {
       console.error("\n❌ Rate limit hit (429). Wait 60 seconds and try again.");

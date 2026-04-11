@@ -120,7 +120,7 @@ async function deploy() {
 }
 
 // RUN
-deploy();
+// deploy();
 
 // getFiles(PROJECT_PATH);
 
