@@ -4,12 +4,10 @@ import fs from "fs";
 import path from "path";
 import readline from "readline";
 import dotenv from "dotenv";
-import { findImages } from "./tools.js";
+import { findImages,search } from "./tools.js";
 import z from "zod";
 
 dotenv.config();
-
-
 
 const imageFinderTool = tool(findImages,{
   name: "image_finder",
@@ -20,11 +18,20 @@ const imageFinderTool = tool(findImages,{
   
 })
 
+const liveDataTool = tool(search,{
+  name: "live_data",
+  description: "Finds live data form the internent",
+  inputSchema: z.object({
+    query: z.string().describe("The query to search for to get real info about it ex: google fonts, tailwind css, "),
+  }),
+})
+
 const googleModel = new ChatGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
   model: "gemini-3.1-flash-lite-preview",
-  maxOutputTokens: 8192,
-  tools: [imageFinderTool],
+  temperature: 0.3,
+  // maxOutputTokens: 8192,
+  tools: [imageFinderTool,liveDataTool],
 });
 
 // ─── SYSTEM PROMPTS ──────────────────────────────────────────────────────────
@@ -307,7 +314,7 @@ async function Planner(userPrompt) {
 }
 
 async function Coder(plan) {
-  console.log("\n💻 [Coder — Gemini 1.5 Flash] Generating code...\n");
+  console.log("\n💻 [Coder — Gemini 3.1 Flash] Generating code...\n");
   const res = await googleModel.invoke([
     { role: "system", content: CODER_PROMPT },
     { role: "user", content: `PLAN:\n${plan}` },
@@ -405,6 +412,6 @@ async function main() {
   } finally {
     rl.close();
   }
-}
+};
 
 main();
