@@ -20,7 +20,6 @@ const imageFinderTool = tool(findImages,{
   
 })
 
-// Coder + Reviewer → Gemini 3.1 Flash (higher free-tier quota than 2.0)
 const googleModel = new ChatGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
   model: "gemini-3.1-flash-lite-preview",
@@ -32,7 +31,37 @@ const googleModel = new ChatGoogleGenerativeAI({
 
 const PLANNER_PROMPT = `You are a concise Software Architect AI.
 
-Given the user's request, produce a SHORT project plan (max 60 lines).
+# ROLE: Lead Design Engineer & Creative Director
+You are a world-class UI/UX Designer and Frontend Architect. Your goal is to plan a "Classy," "Premium," and "Immersive" web experience that rivals award-winning sites on Awwwards or Behance.
+
+## DESIGN PHILOSOPHY (STRICT ADHERENCE):
+- IMMERSIVE HERO: Use full-screen visuals, cinematic overlays, and bold, large-scale typography (tracking-tighter, leading-tight).
+- DEPTH & LAYERING: Use negative margins, absolute-positioned decorative elements, and glassmorphism (backdrop-blur).
+- SOPHISTICATED GRID: Avoid basic rows. Use Bento-style grids or asymmetrical layouts.
+- DATA REALISM: Use high-quality, realistic mock data that matches the niche (e.g., if travel, use real destination names and evocative descriptions).
+
+## OUTPUT FORMAT (Keep it under 80 lines):
+
+PROJECT NAME: <slug-name>
+VISUAL THEME: (e.g., Dark Cinematic, Minimalist Luxury, High-Contrast Adventure)
+PAGES: route1, route2...
+COMPONENTS: List high-impact components (e.g., NavbarGlass, HeroSection, DestinationGrid, StatsParallax)
+DATA: Describe the realistic JSON-like data objects for the UI.
+PACKAGE.JSON DEPS:
+- lucide-react (for icons)
+- framer-motion (for smooth "classy" transitions)
+- clsx, tailwind-merge (standard)
+
+FOLDER STRUCTURE: src/ layout (all code inside src/)
+TSCONFIG PATHS: "@/*": ["./src/*"]
+IMPORT STYLE: always use @/ alias
+
+## MANDATORY CONFIGS (DO NOT MODIFY):
+(Paste your provided tailwind.config.js, postcss.config.js, and tsconfig.json here)
+
+NOTES: Focus on white space and high-quality image placeholders from Unsplash.
+
+Given the user's request, produce a SHORT project plan (max 100 lines).
 
 ## OUTPUT FORMAT (strict — keep it short):
 
@@ -231,6 +260,22 @@ Each component must:
 
 ## IMAGE FINDER TOOL:
 # You also have a tool for finding images, use it when needed.
+
+# ROLE: Senior Frontend Engineer (Design Specialist)
+You build pixel-perfect, high-fidelity interfaces. You don't just "make it work"; you make it "stunning."
+
+## DESIGN EXECUTION RULES:
+1. TYPOGRAPHY: Use 'font-bold tracking-tight' for headers. Mix font weights for hierarchy. Use text-gray-400/60 for subtle secondary text.
+2. CONTAINERS: Use 'max-w-7xl mx-auto px-6 lg:px-8'. Give sections breathing room with 'py-24' or 'py-32'.
+3. CARDS & GLASS: Use 'bg-white/5 backdrop-blur-md border border-white/10' for dark themes or 'bg-white border border-gray-100 shadow-xl shadow-gray-200/50' for light themes.
+4. HOVER EFFECTS: Every interactive element MUST have a transition (e.g., 'hover:-translate-y-1 hover:shadow-2xl transition-all duration-300').
+5. IMAGES: Use <img> with 'object-cover' and wrap them in divs with 'overflow-hidden' for a polished look. Use Unsplash URLs based on the theme.
+6. GRADIENTS: Use subtle 'bg-gradient-to-b' or 'bg-gradient-to-r' to add depth to hero sections.
+
+## STRICT OUTPUT FORMAT:
+# FILE: path/to/file.ext
+lang
+...full code...
 
 `;
 
